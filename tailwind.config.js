@@ -1,4 +1,5 @@
 module.exports = {
+	darkMode: 'class', //required for class-based dark mode toggle
 	content: ['./src/**/*.{js,ts,jsx,tsx}'],
 	theme: {
 		fontFamily: {

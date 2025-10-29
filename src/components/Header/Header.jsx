@@ -1,31 +1,44 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Menu, X, Sun, Moon, FileText, BarChart3, Target, CheckCircle, MessageSquare, Info } from "lucide-react";
 
 export function Header() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [isDark, setIsDark] = useState(false);
 
+  // ✅ Load saved theme on component mount
+  useEffect(() => {
+    const savedTheme = localStorage.getItem("theme");
+    if (savedTheme === "dark") {
+      document.documentElement.classList.add("dark");
+      setIsDark(true);
+    } else {
+      document.documentElement.classList.remove("dark");
+      setIsDark(false);
+    }
+  }, []);
+
+  // ✅ Toggle theme and save to localStorage
   const toggleTheme = () => {
     const newTheme = !isDark;
     setIsDark(newTheme);
-    
+
     if (newTheme) {
-      document.documentElement.classList.add('dark');
-      localStorage.setItem('theme', 'dark');
+      document.documentElement.classList.add("dark");
+      localStorage.setItem("theme", "dark");
     } else {
-      document.documentElement.classList.remove('dark');
-      localStorage.setItem('theme', 'light');
+      document.documentElement.classList.remove("dark");
+      localStorage.setItem("theme", "light");
     }
   };
 
   const menuItems = [
-    { name: 'Home', href: '/', icon: Info },
-    { name: 'Resume Analyzer', href: '/analyzer', icon: FileText },
-    { name: 'Job Matching', href: '/job-matching', icon: Target },
-    { name: 'ATS Checker', href: '/ats-checker', icon: CheckCircle },
-    { name: 'Mock Test', href: '/mock-test', icon: BarChart3 },
-    { name: 'Contact Us', href: '/contact', icon: MessageSquare },
-    { name: 'About', href: '/about', icon: Info },
+    { name: "Home", href: "/", icon: Info },
+    { name: "Resume Analyzer", href: "/analyzer", icon: FileText },
+    { name: "Job Matching", href: "/job-matching", icon: Target },
+    { name: "ATS Checker", href: "/ats-checker", icon: CheckCircle },
+    { name: "Mock Test", href: "/mock-test", icon: BarChart3 },
+    { name: "Contact Us", href: "/contact", icon: MessageSquare },
+    { name: "About", href: "/about", icon: Info },
   ];
 
   return (
@@ -36,7 +49,7 @@ export function Header() {
           ATSify AI
         </div>
 
-        {/* Desktop Navigation - hidden on mobile */}
+        {/* Desktop Navigation */}
         <div className="hidden lg:flex space-x-8 items-center">
           {menuItems.slice(0, 5).map((item) => (
             <a
@@ -47,7 +60,7 @@ export function Header() {
               {item.name}
             </a>
           ))}
-          
+
           {/* Theme toggle */}
           <button
             onClick={toggleTheme}
@@ -66,7 +79,7 @@ export function Header() {
         </button>
       </div>
 
-      {/* Mobile menu overlay */}
+      {/* Mobile Menu */}
       {isMenuOpen && (
         <div className="lg:hidden absolute top-16 left-0 right-0 bg-white dark:bg-[#121212] border-b border-gray-200 dark:border-gray-800 shadow-lg">
           <div className="px-4 py-4 space-y-2">
@@ -84,14 +97,14 @@ export function Header() {
                 </a>
               );
             })}
-            
-            {/* Mobile theme toggle */}
+
+            {/* Theme toggle mobile */}
             <button
               onClick={toggleTheme}
               className="flex items-center space-x-3 px-4 py-3 w-full text-left text-gray-600 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors rounded-lg font-jetbrains-mono"
             >
               {isDark ? <Sun size={20} /> : <Moon size={20} />}
-              <span>{isDark ? 'Light Mode' : 'Dark Mode'}</span>
+              <span>{isDark ? "Light Mode" : "Dark Mode"}</span>
             </button>
           </div>
         </div>
