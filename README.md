@@ -69,7 +69,6 @@ npm run dev
 
 ## 👨‍💻 Author
 **Jaykishor Singh**  
-Full Stack Developer | AI Enthusiast  
 🔗 [GitHub Profile](https://github.com/Jaybyte01)
 
 EOT
