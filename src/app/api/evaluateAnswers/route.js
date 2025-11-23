@@ -1,112 +1,89 @@
+import { GoogleGenerativeAI } from "@google/generative-ai";
+
 export async function POST(request) {
   try {
     const { jobRole, questions, answers } = await request.json();
-    
+
     if (!jobRole || !questions || !answers) {
-      return Response.json({ error: 'Job role, questions, and answers are required' }, { status: 400 });
+      return Response.json(
+        { error: "Job role, questions, and answers are required" },
+        { status: 400 }
+      );
     }
 
     if (questions.length !== answers.length) {
-      return Response.json({ error: 'Number of questions and answers must match' }, { status: 400 });
+      return Response.json(
+        { error: "Number of questions and answers must match" },
+        { status: 400 }
+      );
     }
 
-    // Prepare questions and answers for evaluation
-    const qaText = questions.map((question, index) => 
-      `Question ${index + 1}: ${question}\nAnswer: ${answers[index]}\n`
-    ).join('\n');
+    // Prepare combined Q/A text
+    const qaText = questions
+      .map(
+        (q, i) => `Question ${i + 1}: ${q}\nAnswer: ${answers[i]}`
+      )
+      .join("\n\n");
 
-    // Evaluate answers with AI
-    const evaluationPrompt = `You are an expert interviewer and career coach. Evaluate the following interview responses for a ${jobRole} position.
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({
+      model: "gemini-2.0-flash",
+    });
+
+    
+    const prompt = `
+You are an expert interviewer and career coach. Evaluate the following interview responses for a ${jobRole} role:
 
 ${qaText}
 
-Please provide a comprehensive evaluation in JSON format with:
-1. overallScore (number 0-100): Overall interview performance score
-2. categoryScores (object): Scores for different categories like communication, technical, problemSolving, leadership
-3. feedback (string): Overall performance summary
-4. detailedFeedback (array): Specific feedback for each answer
-5. strengths (array): Key strengths demonstrated
-6. improvements (array): Areas that need improvement
-7. recommendations (string): Specific recommendations for career development
+Return ONLY valid JSON matching this EXACT schema:
 
-Focus on:
-- Clarity and structure of responses
-- Relevance to the role
-- Problem-solving approach
-- Technical competency (if applicable)
-- Communication skills
-- Leadership potential
-- Examples and specificity
-- Professional growth mindset
+{
+  "overallScore": number (0-100),
+  "categoryScores": {
+    "communication": number,
+    "technical": number,
+    "problemSolving": number,
+    "leadership": number
+  },
+  "feedback": "string",
+  "detailedFeedback": ["string", ...],
+  "strengths": ["string", ...],
+  "improvements": ["string", ...],
+  "recommendations": "string"
+}
 
-Provide constructive, actionable feedback that helps the candidate improve.
+RULES:
+- No markdown
+- No backticks
+- No explanation
+- Only valid JSON
+`;
 
-Respond only with valid JSON.`;
+    const result = await model.generateContent(prompt);
+    let text = result.response.text().trim();
 
-    const response = await fetch('/integrations/google-gemini-2-5-pro/', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        messages: [
-          {
-            role: 'user',
-            content: evaluationPrompt
-          }
-        ],
-        json_schema: {
-          name: "interview_evaluation",
-          schema: {
-            type: "object",
-            properties: {
-              overallScore: { type: "number" },
-              categoryScores: {
-                type: "object",
-                properties: {
-                  communication: { type: "number" },
-                  technical: { type: "number" },
-                  problemSolving: { type: "number" },
-                  leadership: { type: "number" }
-                },
-                required: ["communication", "technical", "problemSolving", "leadership"],
-                additionalProperties: false
-              },
-              feedback: { type: "string" },
-              detailedFeedback: {
-                type: "array",
-                items: { type: "string" }
-              },
-              strengths: {
-                type: "array",
-                items: { type: "string" }
-              },
-              improvements: {
-                type: "array",
-                items: { type: "string" }
-              },
-              recommendations: { type: "string" }
-            },
-            required: ["overallScore", "categoryScores", "feedback", "detailedFeedback", "strengths", "improvements", "recommendations"],
-            additionalProperties: false
-          }
-        }
-      }),
-    });
+    text = text
+      .replace(/```json/gi, "")
+      .replace(/```/g, "")
+      .trim();
 
-    if (!response.ok) {
-      throw new Error(`AI evaluation failed: ${response.statusText}`);
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (err) {
+      console.error("AI JSON parse failed:", text);
+      return Response.json(
+        { error: "AI returned invalid JSON" },
+        { status: 500 }
+      );
     }
 
-    const aiResponse = await response.json();
-    const evaluation = JSON.parse(aiResponse.choices[0].message.content);
-
-    return Response.json(evaluation);
-
+    return Response.json(parsed);
   } catch (error) {
-    console.error('Answer evaluation error:', error);
+    console.error("Answer evaluation error:", error);
     return Response.json(
-      { error: 'Failed to evaluate answers. Please try again.' },
+      { error: "Failed to evaluate answers. Please try again." },
       { status: 500 }
     );
   }

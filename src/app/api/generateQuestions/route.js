@@ -1,67 +1,53 @@
+import { GoogleGenerativeAI } from "@google/generative-ai";
+
 export async function POST(request) {
   try {
     const { jobRole } = await request.json();
-    
+
     if (!jobRole || !jobRole.trim()) {
-      return Response.json({ error: 'Job role is required' }, { status: 400 });
+      return Response.json(
+        { error: "Job role is required" },
+        { status: 400 }
+      );
     }
 
-    // Generate interview questions with AI
-    const questionsPrompt = `You are an experienced interviewer and hiring manager. Generate 6-7 thoughtful interview questions for a ${jobRole} position. 
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
-Requirements:
-- Mix of behavioral, technical, and situational questions
-- Questions should be relevant to the specific role
-- Include both common interview questions and role-specific ones
-- Avoid yes/no questions - focus on open-ended questions that allow detailed responses
-- Questions should help assess skills, experience, problem-solving, and cultural fit
+    const prompt = `
+You are an expert interviewer. Generate 6-7 interview questions for a "${jobRole}" role.
 
-Please return only a JSON array of question strings, no additional text.
+Return ONLY JSON:
+{
+  "questions": ["Q1", "Q2", ...]
+}
 
-Example format: ["Question 1?", "Question 2?", ...]`;
+No markdown, no explanation, no \`\`\`json blocks.
+`;
 
-    const response = await fetch('/integrations/google-gemini-2-5-pro/', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        messages: [
-          {
-            role: 'user',
-            content: questionsPrompt
-          }
-        ],
-        json_schema: {
-          name: "interview_questions",
-          schema: {
-            type: "object",
-            properties: {
-              questions: {
-                type: "array",
-                items: { type: "string" }
-              }
-            },
-            required: ["questions"],
-            additionalProperties: false
-          }
-        }
-      }),
-    });
+    const result = await model.generateContent(prompt);
+    let text = result.response.text();
 
-    if (!response.ok) {
-      throw new Error(`AI question generation failed: ${response.statusText}`);
+    text = text.replace(/```json/gi, "")
+               .replace(/```/g, "")
+               .trim();
+
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (err) {
+      console.error("AI JSON parse failed:", text);
+      return Response.json(
+        { error: "AI returned invalid JSON. Try again." },
+        { status: 500 }
+      );
     }
 
-    const aiResponse = await response.json();
-    const result = JSON.parse(aiResponse.choices[0].message.content);
-
-    return Response.json(result);
-
+    return Response.json(parsed);
   } catch (error) {
-    console.error('Question generation error:', error);
+    console.error("Question generation error:", error);
     return Response.json(
-      { error: 'Failed to generate questions. Please try again.' },
+      { error: "Failed to generate questions" },
       { status: 500 }
     );
   }
