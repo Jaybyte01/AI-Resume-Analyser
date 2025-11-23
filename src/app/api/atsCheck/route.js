@@ -1,185 +1,220 @@
+export const runtime = "nodejs";
+
+import mammoth from "mammoth";
+import PDFParser from "pdf2json";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
+// ---------------- Safe decoder for pdf2json strings ----------------
+function safeDecode(str) {
+  try {
+    return decodeURIComponent(str || "");
+  } catch {
+    try {
+      return decodeURIComponent((str || "").replace(/%(?![0-9A-Fa-f]{2})/g, "%25"));
+    } catch {
+      return str || "";
+    }
+  }
+}
+
+// ---------------- PDF extraction using pdf2json (robust) ----------------
+function extractPdfText(buffer) {
+  return new Promise((resolve, reject) => {
+    const parser = new PDFParser();
+
+    parser.on("pdfParser_dataError", (err) => {
+      reject(err);
+    });
+
+    parser.on("pdfParser_dataReady", (pdfData) => {
+      try {
+        let text = "";
+
+        const pages =
+          pdfData?.formImage?.Pages ||
+          pdfData?.Pages ||
+          [];
+
+        pages.forEach((page) => {
+          if (!page.Texts) return;
+          page.Texts.forEach((t) => {
+            if (!t.R) return;
+            t.R.forEach((r) => {
+              // r.T may be URL-encoded text fragments
+              text += safeDecode(r.T || "") + " ";
+            });
+          });
+        });
+
+        resolve(text.trim());
+      } catch (err) {
+        reject(err);
+      }
+    });
+
+    parser.parseBuffer(buffer);
+  });
+}
+
+// ---------------- Helper: robustly parse Gemini response ----------------
+async function parseGeminiJsonResponse(geminiResp) {
+  try {
+
+    if (geminiResp?.response?.text) {
+      const txt = await geminiResp.response.text();
+      return JSON.parse(txt);
+    }
+    if (typeof geminiResp === "string") {
+      return JSON.parse(geminiResp);
+    }
+
+    if (typeof geminiResp === "object") {
+      
+      if (
+        geminiResp.atsScore !== undefined ||
+        geminiResp.matchPercentage !== undefined
+      ) {
+        return geminiResp;
+      }
+
+      if (geminiResp.candidates && geminiResp.candidates[0]?.content) {
+        const contentParts = geminiResp.candidates[0].content.parts;
+        const joined = contentParts.map((p) => p.text || "").join("\n");
+        return JSON.parse(joined);
+      }
+
+      if (geminiResp.output && typeof geminiResp.output === "string") {
+        return JSON.parse(geminiResp.output);
+      }
+
+      if (geminiResp.outputs && Array.isArray(geminiResp.outputs) && geminiResp.outputs[0]?.content) {
+        const joined = geminiResp.outputs.map(o => (o.content?.[0]?.text || "")).join("\n");
+        return JSON.parse(joined);
+      }
+    }
+
+    throw new Error("Unable to parse Gemini response to JSON");
+  } catch (err) {
+    throw new Error(`Failed to parse Gemini JSON response: ${err.message}`);
+  }
+}
+
+// ---------------- Main route ----------------
 export async function POST(request) {
   try {
     const formData = await request.formData();
-    const file = formData.get('file');
-    
+    const file = formData.get("file");
+
     if (!file) {
-      return Response.json({ error: 'No file provided' }, { status: 400 });
+      return Response.json({ error: "No file provided" }, { status: 400 });
     }
 
-    // Check file type
     const allowedTypes = [
-      'application/pdf',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'application/msword'
+      "application/pdf",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "application/msword",
     ];
-    
+
     if (!allowedTypes.includes(file.type)) {
-      return Response.json({ error: 'Only PDF and DOCX files are supported' }, { status: 400 });
+      return Response.json(
+        { error: "Only PDF and DOCX files are supported" },
+        { status: 400 }
+      );
     }
 
-    // Extract resume text (placeholder implementation)
-    let resumeText = '';
-    if (file.type === 'application/pdf') {
-      resumeText = `Sample resume text extracted from PDF: ${file.name}. This is a placeholder for actual PDF text extraction.
+    // Read file bytes
+    const arrayBuffer = await file.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
 
-      John Smith
-      Software Engineer
-      john.smith@email.com | (555) 123-4567 | LinkedIn: /in/johnsmith
-
-      PROFESSIONAL EXPERIENCE
-      Software Engineer | Tech Company | 2020-2023
-      - Developed web applications using React and Node.js
-      - Collaborated with cross-functional teams
-      - Improved application performance by 30%
-
-      Frontend Developer | Startup Inc | 2018-2020
-      - Built responsive user interfaces
-      - Worked with modern JavaScript frameworks
-
-      SKILLS
-      JavaScript, React, Node.js, Python, SQL, Git, AWS, HTML, CSS
-
-      EDUCATION
-      Bachelor of Science in Computer Science
-      University of Technology | 2014-2018
-      `;
+    // Extract text
+    let resumeText = "";
+    if (file.type === "application/pdf") {
+      try {
+        resumeText = await extractPdfText(buffer);
+      } catch (err) {
+        console.error("PDF extraction error:", err);
+        return Response.json({ error: "Failed to extract text from PDF" }, { status: 400 });
+      }
     } else {
-      resumeText = `Sample resume text extracted from DOCX: ${file.name}. This is a placeholder for actual DOCX text extraction.
-
-      John Smith
-      Software Engineer
-      john.smith@email.com | (555) 123-4567 | LinkedIn: /in/johnsmith
-
-      PROFESSIONAL EXPERIENCE
-      Software Engineer | Tech Company | 2020-2023
-      - Developed web applications using React and Node.js
-      - Collaborated with cross-functional teams
-      - Improved application performance by 30%
-
-      Frontend Developer | Startup Inc | 2018-2020
-      - Built responsive user interfaces
-      - Worked with modern JavaScript frameworks
-
-      SKILLS
-      JavaScript, React, Node.js, Python, SQL, Git, AWS, HTML, CSS
-
-      EDUCATION
-      Bachelor of Science in Computer Science
-      University of Technology | 2014-2018
-      `;
+      
+      try {
+        const result = await mammoth.extractRawText({ buffer });
+        resumeText = result.value || "";
+      } catch (err) {
+        console.error("DOCX extraction error:", err);
+        return Response.json({ error: "Failed to extract text from DOCX" }, { status: 400 });
+      }
     }
 
-    // Analyze ATS compatibility with AI
-    const atsPrompt = `You are an ATS (Applicant Tracking System) specialist. Analyze the following resume for ATS compatibility and provide a comprehensive assessment.
+    if (!resumeText || resumeText.trim().length < 20) {
+      return Response.json(
+        { error: "Could not extract meaningful text from resume" },
+        { status: 400 }
+      );
+    }
+
+   
+    const atsPrompt = `
+You are an ATS (Applicant Tracking System) specialist. Analyze the following resume for ATS compatibility and provide a comprehensive assessment.
 
 Resume Text:
 ${resumeText}
 
-Please analyze and return a JSON response with:
-1. atsScore (number 0-100): Overall ATS compatibility score
-2. passabilityScore (number 0-100): Likelihood of passing ATS screening
-3. overallRating (string): "Excellent", "Good", or "Needs Improvement"
-4. strengths (array): List of ATS-friendly elements found
-5. weaknesses (array): List of ATS issues that need fixing
-6. formatting (object): { score: number 0-100, issues: array of strings }
-7. keywords (object): { score: number 0-100, analysis: string }
-8. sections (object): { score: number 0-100, analysis: string }
-9. recommendations (string): Detailed recommendations for ATS optimization
+Please analyze and return ONLY valid JSON with this exact structure:
+{
+  "atsScore": number,                      // 0-100
+  "passabilityScore": number,              // 0-100
+  "overallRating": "Excellent|Good|Needs Improvement",
+  "strengths": ["string"],
+  "weaknesses": ["string"],
+  "formatting": { "score": number, "issues": ["string"] },
+  "keywords": { "score": number, "analysis": "string" },
+  "sections": { "score": number, "analysis": "string" },
+  "recommendations": "string"
+}
+Respond only with JSON (no explanation, no markdown).
+`;
 
-Focus on:
-- Standard section headers (Summary, Experience, Education, Skills)
-- Keyword density and relevance
-- Formatting simplicity (no graphics, tables, or complex layouts)
-- File format compatibility
-- Text readability by parsing software
-- Contact information placement
-- Date formats and consistency
-- Bullet points vs paragraphs
-- Font choices and readability
+    const model = genAI.getGenerativeModel({ model: "models/gemini-2.5-pro" });
 
-Respond only with valid JSON.`;
-
-    const response = await fetch('/integrations/google-gemini-2-5-pro/', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
+    const geminiResp = await model.generateContent({
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: atsPrompt }],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.0,
+        responseMimeType: "application/json",
       },
-      body: JSON.stringify({
-        messages: [
-          {
-            role: 'user',
-            content: atsPrompt
-          }
-        ],
-        json_schema: {
-          name: "ats_compatibility_analysis",
-          schema: {
-            type: "object",
-            properties: {
-              atsScore: { type: "number" },
-              passabilityScore: { type: "number" },
-              overallRating: { type: "string" },
-              strengths: {
-                type: "array",
-                items: { type: "string" }
-              },
-              weaknesses: {
-                type: "array",
-                items: { type: "string" }
-              },
-              formatting: {
-                type: "object",
-                properties: {
-                  score: { type: "number" },
-                  issues: {
-                    type: "array",
-                    items: { type: "string" }
-                  }
-                },
-                required: ["score", "issues"],
-                additionalProperties: false
-              },
-              keywords: {
-                type: "object",
-                properties: {
-                  score: { type: "number" },
-                  analysis: { type: "string" }
-                },
-                required: ["score", "analysis"],
-                additionalProperties: false
-              },
-              sections: {
-                type: "object",
-                properties: {
-                  score: { type: "number" },
-                  analysis: { type: "string" }
-                },
-                required: ["score", "analysis"],
-                additionalProperties: false
-              },
-              recommendations: { type: "string" }
-            },
-            required: ["atsScore", "passabilityScore", "overallRating", "strengths", "weaknesses", "formatting", "keywords", "sections", "recommendations"],
-            additionalProperties: false
-          }
-        }
-      }),
     });
+    const analysis = await parseGeminiJsonResponse(geminiResp);
 
-    if (!response.ok) {
-      throw new Error(`AI analysis failed: ${response.statusText}`);
+    const requiredFields = [
+      "atsScore",
+      "passabilityScore",
+      "overallRating",
+      "strengths",
+      "weaknesses",
+      "formatting",
+      "keywords",
+      "sections",
+      "recommendations",
+    ];
+    for (const f of requiredFields) {
+      if (analysis[f] === undefined) {
+        console.warn(`ATS analysis missing field: ${f}`);
+      }
     }
 
-    const aiResponse = await response.json();
-    const analysis = JSON.parse(aiResponse.choices[0].message.content);
-
     return Response.json(analysis);
-
-  } catch (error) {
-    console.error('ATS check error:', error);
+  } catch (err) {
+    console.error("ATS check error:", err);
     return Response.json(
-      { error: 'Failed to check ATS compatibility. Please try again.' },
+      { error: "Failed to check ATS compatibility", details: err.message },
       { status: 500 }
     );
   }
