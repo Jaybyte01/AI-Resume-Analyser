@@ -1,56 +1,104 @@
+import mammoth from "mammoth";
+import PDFParser from "pdf2json";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+
+// ----------- SAFE DECODER -----------
+function safeDecode(str) {
+  try {
+    return decodeURIComponent(str);
+  } catch {
+    return str;
+  }
+}
+
+// ----------- PDF EXTRACTOR -----------
+function extractPdfText(buffer) {
+  return new Promise((resolve, reject) => {
+    const parser = new PDFParser();
+
+    parser.on("pdfParser_dataError", (err) => reject(err));
+
+    parser.on("pdfParser_dataReady", (pdfData) => {
+      try {
+        let text = "";
+
+        const pages =
+          pdfData?.formImage?.Pages ||
+          pdfData?.Pages ||
+          [];
+
+        pages.forEach((page) => {
+          if (!page.Texts) return;
+          page.Texts.forEach((t) => {
+            if (!t.R) return;
+            t.R.forEach((r) => {
+              text += safeDecode(r.T || "") + " ";
+            });
+          });
+        });
+
+        resolve(text.trim());
+      } catch (error) {
+        reject(error);
+      }
+    });
+
+    parser.parseBuffer(buffer);
+  });
+}
+
+// ----------- MAIN POST ROUTE -----------
 export async function POST(request) {
   try {
     const formData = await request.formData();
-    const file = formData.get('file');
-    const jobDescription = formData.get('jobDescription');
-    
+    const file = formData.get("file");
+    const jobDescription = formData.get("jobDescription");
+
     if (!file || !jobDescription) {
-      return Response.json({ error: 'File and job description are required' }, { status: 400 });
+      return Response.json(
+        { error: "File and job description are required" },
+        { status: 400 }
+      );
     }
 
-    // Check file type
     const allowedTypes = [
-      'application/pdf',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'application/msword'
+      "application/pdf",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ];
-    
+
     if (!allowedTypes.includes(file.type)) {
-      return Response.json({ error: 'Only PDF and DOCX files are supported' }, { status: 400 });
+      return Response.json(
+        { error: "Only PDF and DOCX files are supported" },
+        { status: 400 }
+      );
     }
 
-    // Extract resume text (placeholder implementation)
-    let resumeText = '';
-    if (file.type === 'application/pdf') {
-      resumeText = `Sample resume text extracted from PDF: ${file.name}. This is a placeholder for actual PDF text extraction.
+    const buffer = Buffer.from(await file.arrayBuffer());
+    let resumeText = "";
 
-      Professional Experience:
-      - Software Engineer at Tech Company (2020-2023)
-      - Frontend Developer at Startup Inc (2018-2020)
-      
-      Skills:
-      JavaScript, React, Node.js, Python, SQL, Git, AWS
-      
-      Education:
-      Bachelor's in Computer Science
-      `;
-    } else {
-      resumeText = `Sample resume text extracted from DOCX: ${file.name}. This is a placeholder for actual DOCX text extraction.
-
-      Professional Experience:
-      - Software Engineer at Tech Company (2020-2023)
-      - Frontend Developer at Startup Inc (2018-2020)
-      
-      Skills:
-      JavaScript, React, Node.js, Python, SQL, Git, AWS
-      
-      Education:
-      Bachelor's in Computer Science
-      `;
+    // ----------- PDF -----------
+    if (file.type === "application/pdf") {
+      resumeText = await extractPdfText(buffer);
     }
 
-    // Analyze job match with AI
-    const matchPrompt = `You are an expert job matching specialist. Compare the candidate's resume against the job description and provide a comprehensive analysis.
+    // ----------- DOCX -----------
+    else {
+      const result = await mammoth.extractRawText({ buffer });
+      resumeText = result.value;
+    }
+
+    if (!resumeText || resumeText.length < 20) {
+      return Response.json(
+        { error: "Could not extract text from resume" },
+        { status: 400 }
+      );
+    }
+
+    // ----------- AI PROMPT -----------
+    const matchPrompt = `
+You are an expert job-matching specialist. Compare the candidate's resume with the job description.
 
 Resume:
 ${resumeText}
@@ -58,80 +106,42 @@ ${resumeText}
 Job Description:
 ${jobDescription}
 
-Please analyze and return a JSON response with:
-1. matchPercentage (number 0-100): Overall match percentage between resume and job
-2. experienceMatch (number 0-100): How well the candidate's experience aligns
-3. roleAlignment (number 0-100): How well the candidate fits the role requirements
-4. matchedKeywords (array): Keywords that appear in both resume and job description
-5. missingKeywords (array): Important keywords from job description missing in resume
-6. skillGaps (array): Specific skills the candidate needs to develop
-7. recommendations (string): Detailed recommendations for improving the match
-8. jobTitle (string): Extract the job title from the description
+Return only valid JSON with the following structure:
+{
+  "matchPercentage": number,
+  "experienceMatch": number,
+  "roleAlignment": number,
+  "matchedKeywords": ["string"],
+  "missingKeywords": ["string"],
+  "skillGaps": ["string"],
+  "recommendations": "string",
+  "jobTitle": "string"
+}
+`;
 
-Focus on:
-- Technical skills alignment
-- Experience level match
-- Industry background relevance
-- Required vs. preferred qualifications
-- Career progression fit
-
-Respond only with valid JSON.`;
-
-    const response = await fetch('/integrations/google-gemini-2-5-pro/', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        messages: [
-          {
-            role: 'user',
-            content: matchPrompt
-          }
-        ],
-        json_schema: {
-          name: "job_match_analysis",
-          schema: {
-            type: "object",
-            properties: {
-              matchPercentage: { type: "number" },
-              experienceMatch: { type: "number" },
-              roleAlignment: { type: "number" },
-              matchedKeywords: {
-                type: "array",
-                items: { type: "string" }
-              },
-              missingKeywords: {
-                type: "array",
-                items: { type: "string" }
-              },
-              skillGaps: {
-                type: "array",
-                items: { type: "string" }
-              },
-              recommendations: { type: "string" },
-              jobTitle: { type: "string" }
-            },
-            required: ["matchPercentage", "experienceMatch", "roleAlignment", "matchedKeywords", "missingKeywords", "skillGaps", "recommendations", "jobTitle"],
-            additionalProperties: false
-          }
-        }
-      }),
+    // ----------- GEMINI 2.5 PRO CALL -----------
+    const model = genAI.getGenerativeModel({
+      model: "models/gemini-2.5-pro",
     });
 
-    if (!response.ok) {
-      throw new Error(`AI analysis failed: ${response.statusText}`);
-    }
+    const resp = await model.generateContent({
+      contents: [{ role: "user", parts: [{ text: matchPrompt }] }],
+      generationConfig: {
+        temperature: 0.2,
+        responseMimeType: "application/json",
+      },
+    });
 
-    const aiResponse = await response.json();
-    const analysis = JSON.parse(aiResponse.choices[0].message.content);
+    const analysis = JSON.parse(resp.response.text());
 
     return Response.json(analysis);
-
-  } catch (error) {
-    console.error('Job matching error:', error);
+  } catch (err) {
+    console.error("Job matching error:", err);
     return Response.json(
-      { error: 'Failed to analyze job match. Please try again.' },
+      {
+        error: "Failed to analyze job match.",
+        details: err.message,
+      },
       { status: 500 }
     );
   }
