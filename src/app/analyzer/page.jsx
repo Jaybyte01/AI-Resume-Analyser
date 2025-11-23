@@ -30,7 +30,7 @@ export default function AnalyzerPage() {
       }
 
       const result = await response.json();
-      setAnalysis(result);
+      setAnalysis(result.analysis);
 
       // Save to localStorage
       const savedAnalyses = JSON.parse(localStorage.getItem('resumeAnalyses') || '[]');
